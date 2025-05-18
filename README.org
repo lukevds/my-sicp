@@ -1,0 +1,7 @@
+My solutions, written in Emacs Lisp, to some of the problems of [[https://melpa.org/#/sicp][Structure and Interpretation of Computer Programs]].
+
+
+* todos
+- [ ] fix ok and error
+- [ ] create tests using an adequate lib for elisp
+- [ ] add explanatory comments

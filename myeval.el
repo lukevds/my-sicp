@@ -32,6 +32,8 @@ Examples are the symbols for the values true and false")
   (tagged-value? value 'error))
 
 ;;; env
+; is it working? if a change an assignment in a frame, will children
+; frames see it?
 (defun make-env (bindings parent)
   (cons bindings parent))
 
@@ -41,12 +43,11 @@ Examples are the symbols for the values true and false")
 (defun env-parent (env)
   (cdr env))
 
-;; v2 retornar (ok (name . value)) (error (name . message))
 (defun lookup-value (name env)
-  "Looks for value in env, if not found, looks in env's parent.
-If a value is found, returns a cons whose car is `ok' and cdr is the
-value of `name'. Otherwise, returns a cons whose car is `error' and
-cdr is the string \"`name' not found\"."
+  "Looks for value in env, walking up ancestor tree.
+If a value is found, returns a ok-value whose car is `name' and cdr
+is the value of `name'. Otherwise, returns an error-value whose car is
+`name' and cdr is the string \"not found\"."
   (let ((current-env env)
 	(values (env-bindings env))
 	(value) (result 'error))
@@ -65,25 +66,28 @@ cdr is the string \"`name' not found\"."
 	    (setq values (cdr values))
 	  (setq current-env (env-parent current-env)
 		values (env-bindings current-env)))))
-    (cons result (or value (format "`%S' not found" name)))))
+    (cons result (or value (cons name "not found")))))
+
+(defun lookup-value-no-ancestors (name env)
+  (lookup-value name (make-env (env-bindings env) nil)))
 
 (defun define-value (name value env)
   "Creates a binding in `env' if it does not exist or update it.
 Only consider `env's bindings, does not access parents."
-  (let* ((env-no-ancestors (make-env (env-bindings env) nil))
-	 (already-exists (lookup-value name env-no-ancestors)))
+  (let* ((already-exists (lookup-value-no-ancestors name env)))
     (if (ok? already-exists)
 	(setcdr (cdr already-exists) value)
       (setcar env (cons (cons name value) (car env))))))
 
-;; esta retornando erro mas nao ok
 (defun assign-value (name value env)
   "If `name' is bound in `env', sets its value to `value'.
 Otherwise, returns an error."
   (let ((already-exists (lookup-value name env)))
     (if (ok? already-exists)
-	(setcdr (cdr already-exists) value)
-      (make-error (format "`%S' is not defined" name)))))
+	(progn
+	  (setcdr (cdr already-exists) value)
+	  (make-ok (cons name value)))
+      (make-error (cons name "is undefined, therefore a value cannot be assigned to it")))))
 
 (defun remove-binding (name env)
   "Removes a binding with `name' in `env'."
@@ -146,23 +150,40 @@ outro-env
 (defun variable? (exp)
   (symbolp exp))
 
+(defun eval-lookup (name env)
+  (let ((lookup-result (lookup-value name env)))
+    (make-ok
+     (cons
+      (when (ok? lookup-result)
+	(cddr lookup-result))
+      env))))
+
 (defun quoted? (exp)
   (tagged-value? exp 'quote))
 
-(defun text-of-quotation (exp)
-  (cadr exp))
+(defun text-of-quotation (exp env)
+  (make-ok (cons (cadr exp) env)))
 
 (defun assignment? (exp)
   (and (tagged-value? exp 'myset)
        (variable? (cadr exp))))
 
 (defun eval-assignment (exp env)
-  (let ((name (cadr exp)))
-    (if (not (error? (lookup-value name (make-env (env-bindings env) nil))))
-	(let* ((evaluation-result (myeval (caddr exp) env))
-	       (value (car evaluation-result))
-	       (resulting-env (cdr evaluation-result)))
-	  (cons (assign-value name value resulting-env) resulting-env)))))
+  (let* ((name (cadr exp))
+	 (evaluation-result (myeval (caddr exp) env))
+	 (evaluation-value (cadr evaluation-result)))
+    (if (ok? evaluation-result)
+	(let ((assignment-result (assign-value name evaluation-value env)))
+	  (if (ok? assignment-result)
+	      ; (cddr (ok name . value)) => value
+	      (make-ok (cons (cddr assignment-result) env))
+	    ; if this happens, we should undo any mutations done by
+	    ; `evaluation-result'
+	    ; how to achieve this:
+	    ; - remove existence check in `assign-value'
+	    ; - make existence check before evaluating `(caddr exp)'
+	    (make-error (cons name "could not be assigned a value"))))
+      (make-error (cons (caddr exp) "could not be evaluated")))))
 
 (defun definition? (exp)
   (and (tagged-value? exp 'mydefine)
@@ -206,17 +227,19 @@ outro-env
 
 ;; fazer retornar (valor . env-talvez-modificado)
 (defun myeval (exp env)
-  (cond ((self-evaluating? exp) (cons exp env))
-        ((variable? exp) (cons (lookup-value exp env) env))
-        ((quoted? exp) (cons (text-of-quotation exp) env))
-        ((assignment? exp) (eval-assignment exp env))
+  (cond ((self-evaluating? exp) (make-ok (cons exp env)))
+        ((variable? exp) (eval-lookup exp env))
+        ((quoted? exp) (text-of-quotation exp env))
+        ((assignment? exp) (eval-assignment exp env)) ;; stopped here
+
         ((definition? exp) (eval-definition exp env))
+
         ((if? exp) (eval-if exp env))
 
         ((lambda? exp)
          (make-procedure (lambda-parameters exp)
                          (lambda-body exp)
-                         env)) ;; stopped here
+                         env))
         ((begin? exp)
          (eval-sequence (begin-actions exp) env))
         ((cond? exp) (myeval (cond->if exp) env))
@@ -226,11 +249,17 @@ outro-env
         (:else
          (error "Unknown expression type -- EVAL" exp))))
 
+(myeval 13 outro-env)
+
+(myeval "abcd" outro-env)
+
 (myeval 'oi outro-env)
+(myeval 'teste outro-env)
 (myeval '(quote (1 2 3)) outro-env)
 
 (myeval '(myset asdf 13) teste-env)
-(myeval '(myset oi 99) teste-env)
+(myeval '(myset oi 18) teste-env)
+(myeval '(myset oi 12) teste-env)
 (myeval '(mydefine olar 2020) teste-env)
 (myeval '(myset olar 400) teste-env)
 (myeval '(quote shrek) teste-env)
@@ -242,6 +271,9 @@ outro-env
 (myeval '(if 'false 1 2) teste-env)
 
 (define-value 'true mylisp-true teste-env)
+
+(myeval '(lambda () 123) teste-env)
+
 
 ;;; apply
 (defun myapply (procedure arguments)

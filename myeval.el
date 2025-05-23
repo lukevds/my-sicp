@@ -136,10 +136,7 @@ outro-env
   (cddr exp))
 
 (defun make-procedure (parameters body env)
-  (let ((procedure-env (make-env nil env)))
-    (cons
-     (list parameters body procedure-env)
-     env)))
+  (list (list parameters body (make-env nil env))))
 
 ;;; eval
 (defun self-evaluating? (exp)
@@ -192,17 +189,17 @@ outro-env
 (defun eval-definition (exp env)
   (let* ((name (cadr exp))
 	 (evaluation-result (myeval (caddr exp) env))
-	 (value (car evaluation-result))
-	 (resulting-env (cdr evaluation-result)))
+	 (value (cadr evaluation-result))
+	 (resulting-env (cddr evaluation-result)))
     (define-value name value resulting-env)
-    (cons value resulting-env)))
+    (make-ok (cons value resulting-env))))
 
 (defun if? (exp)
   (tagged-value? exp 'if))
 
 (defun eval-if (exp env)
   (let* ((condition-result (myeval (cadr exp) env))
-	 (condition-value (car condition-result))
+	 (condition-value (caar condition-result))
 	 (cond-val-is-true
 	  (and (ok? condition-value)
 	       (eq (cddr condition-value) mylisp-true))))
@@ -212,14 +209,60 @@ outro-env
        (cadddr exp))
      (cdr condition-result))))
 
+(defun eval-if (exp env)
+  (let ((condition-result (myeval (cadr exp) env)))
+    (if (ok? condition-result)
+	(myeval
+	 (if (eq (cadr condition-result) mylisp-true)
+	     (caddr exp)
+	   (cadddr exp))
+	 (cddr condition-result))
+      (make-error (cons condition-result "error evaluating condition of if expression")))))
+
+
 (defun lambda? (exp)
   (tagged-value? exp 'lambda))
+
+(defun eval-lambda (exp env)
+  (make-ok
+   (cons
+    (make-procedure
+     (lambda-parameters exp)
+     (lambda-body exp)
+     env)
+    env)))
 
 (defun begin? (exp)
   (tagged-value? exp 'begin))
 
+(defun eval-sequence (exp env)
+  (let* ((exps (cdr exp))
+	 (last-exp (car exps))
+	 (last-env env)
+	 (last-result) (last-result-ok t))
+    (while (and last-exp last-result-ok)
+      (setq last-result (myeval last-exp last-env)
+	    last-result-ok (ok? last-result))
+      (if last-result-ok
+	  (setq last-exp (car exps)
+		exps (cdr exps)
+		last-env (cddr last-result))
+	(setq last-result
+	      (make-error (cons last-result "error evaluating sequence")))))
+    last-result))
+
 (defun cond? (exp)
   (tagged-value? exp 'cond))
+
+;; macros yayyy!
+;; took me a while
+(defun cond->if (exp)
+  (let ((exps (reverse (cdr exp)))
+	(result))
+    (while exps
+      (setq result (list (cons 'if (cons (caar exps) (cons (cadar exps) result))))
+	    exps (cdr exps)))
+    (car result)))
 
 (defun application? (exp)
   (and (consp exp)
@@ -230,19 +273,14 @@ outro-env
   (cond ((self-evaluating? exp) (make-ok (cons exp env)))
         ((variable? exp) (eval-lookup exp env))
         ((quoted? exp) (text-of-quotation exp env))
-        ((assignment? exp) (eval-assignment exp env)) ;; stopped here
-
+        ((assignment? exp) (eval-assignment exp env))
         ((definition? exp) (eval-definition exp env))
-
         ((if? exp) (eval-if exp env))
-
-        ((lambda? exp)
-         (make-procedure (lambda-parameters exp)
-                         (lambda-body exp)
-                         env))
+        ((lambda? exp) (eval-lambda exp env))
         ((begin? exp)
-         (eval-sequence (begin-actions exp) env))
-        ((cond? exp) (myeval (cond->if exp) env))
+         (eval-sequence exp env))
+        ((cond? exp) (myeval (cond->if exp) env)) ;; stopped here
+
         ((application? exp)
          (myapply (myeval (operator exp) env)
                 (list-of-values (operands exp) env)))
@@ -261,6 +299,8 @@ outro-env
 (myeval '(myset oi 18) teste-env)
 (myeval '(myset oi 12) teste-env)
 (myeval '(mydefine olar 2020) teste-env)
+(myeval '(mydefine olar 4040) teste-env)
+(myeval '(mydefine olar 2020) outro-env)
 (myeval '(myset olar 400) teste-env)
 (myeval '(quote shrek) teste-env)
 
@@ -268,12 +308,18 @@ outro-env
 
 (setq teste-resultado (myeval 'false teste-env))
 
-(myeval '(if 'false 1 2) teste-env)
+(myeval '(if false 1 2) teste-env)
+(myeval '(if true 1 2) teste-env)
 
 (define-value 'true mylisp-true teste-env)
 
-(myeval '(lambda () 123) teste-env)
+(myeval '(lambda () 123 456) teste-env)
 
+(myeval 1 teste-env)
+
+(myeval '(begin 1 2 (myset oi 15) 4 5 (myset oi 0) (mydefine kkk 123) 9) teste-env)
+
+(myeval '(cond (1 2) (3 4) (true 5) (false 6)) teste-env)
 
 ;;; apply
 (defun myapply (procedure arguments)
